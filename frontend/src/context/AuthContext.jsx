@@ -1,51 +1,45 @@
-import React, { createContext, useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import api from '../api';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
-const AuthProvider = ({ children }) => {
-  const [token, setToken] = useState(localStorage.getItem('token') || null);
+export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-
-  const fetchUser = useCallback(async (authToken) => {
-    try {
-      const config = { headers: { 'x-auth-token': authToken } };
-      const res = await axios.get('http://localhost:5000/api/auth/me', config);
-      setUser(res.data);
-    } catch (error) {
-      console.error('Failed to fetch user');
-      setToken(null);
-      setUser(null);
-    }
-  }, []);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    if (storedToken) {
-      setToken(storedToken);
-      fetchUser(storedToken);
+    const token = localStorage.getItem('token');
+    if (!token) { setReady(true); return; }
+    api.get('/api/auth/me')
+      .then(r => setUser(r.data.user))
+      .catch(() => setUser(null))
+      .finally(() => setReady(true));
+  }, []);
+
+  const value = useMemo(() => ({
+    user,
+    login: async (email, password) => {
+      const r = await api.post('/api/auth/login', { email, password });
+      localStorage.setItem('token', r.data.token);
+      setUser(r.data.user);
+      return r.data.user;
+    },
+    register: async (email, password, full_name) => {
+      const payload = { email, password };
+      if (full_name) payload.full_name = full_name;
+      const r = await api.post('/api/auth/register', payload);
+      localStorage.setItem('token', r.data.token);
+      setUser(r.data.user);
+      return r.data.user;
+    },
+    logout: () => {
+      localStorage.removeItem('token');
+      setUser(null);
     }
-  }, [fetchUser]);
+  }), [user]);
 
-  const login = async (email, password) => {
-    const response = await axios.post('http://localhost:5000/api/auth/login', { email, password });
-    const { token } = response.data;
-    localStorage.setItem('token', token);
-    setToken(token);
-    await fetchUser(token);
-  };
+  if (!ready) return null;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
-  };
-
-  return (
-    <AuthContext.Provider value={{ token, user, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export { AuthContext, AuthProvider };
+export function useAuth() { return useContext(AuthContext); }

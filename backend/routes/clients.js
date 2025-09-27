@@ -1,70 +1,94 @@
+// backend/routes/clients.js
+'use strict';
+
 const express = require('express');
-const router = express.Router();
 const db = require('../db');
-const authMiddleware = require('../middleware/auth');
-const adminMiddleware = require('../middleware/admin');
+const auth = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/roles');
 
-// Protect all routes in this file
-router.use(authMiddleware);
+const router = express.Router();
 
-// GET /api/clients - Fetches all clients (accessible by any logged-in user)
-router.get('/', async (req, res) => {
+// All clients routes require auth
+router.use(auth);
+
+// Helper: does clients table have user_id column?
+async function clientsHasUserId() {
+  const q = await db.query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name   = 'clients'
+      AND column_name  = 'user_id'
+  `);
+  return q.rowCount > 0;
+}
+
+/**
+ * GET /api/clients
+ * - Admin: returns all clients
+ * - Tutor: returns own clients if clients.user_id exists; otherwise returns []
+ */
+router.get('/', async (req, res, next) => {
   try {
-    const clients = await db.query('SELECT id, client_name, billing_info FROM clients ORDER BY client_name');
-    res.json(clients.rows);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-});
+    const hasUserId = await clientsHasUserId();
 
-// POST /api/clients - Create a new client (admins only)
-router.post('/', adminMiddleware, async (req, res) => {
-  const { client_name, billing_info } = req.body;
-  try {
-    const newClient = await db.query(
-      'INSERT INTO clients (client_name, billing_info) VALUES ($1, $2) RETURNING *',
-      [client_name, billing_info]
-    );
-    res.status(201).json(newClient.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-});
-
-// PUT /api/clients/:id - Update a client (admins only)
-router.put('/:id', adminMiddleware, async (req, res) => {
-  const { client_name, billing_info } = req.body;
-  const { id } = req.params;
-  try {
-    const updatedClient = await db.query(
-      'UPDATE clients SET client_name = $1, billing_info = $2 WHERE id = $3 RETURNING *',
-      [client_name, billing_info, id]
-    );
-    res.json(updatedClient.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-});
-
-// DELETE /api/clients/:id - Delete a client (admins only)
-router.delete('/:id', adminMiddleware, async (req, res) => {
-  const { id } = req.params;
-  try {
-    await db.query('DELETE FROM clients WHERE id = $1', [id]);
-    res.json({ msg: 'Client deleted' });
-  } catch (err)
-  {
-    console.error(err.message);
-    // Handle cases where client is still referenced in sessions
-    if (err.code === '23503') {
-      return res.status(400).json({ msg: 'Cannot delete client. They are still referenced in past sessions.' });
+    if (req.user.role === 'admin') {
+      const all = await db.query(
+        `SELECT id, name, email, notes, created_at
+           FROM clients
+          ORDER BY created_at DESC NULLS LAST, id DESC`
+      );
+      return res.json(all.rows);
     }
-    res.status(500).send('Server Error');
-  }
+
+    if (!hasUserId) return res.json([]); // safe fallback if schema lacks user_id
+
+    const mine = await db.query(
+      `SELECT id, name, email, notes, created_at
+         FROM clients
+        WHERE user_id = $1
+        ORDER BY created_at DESC NULLS LAST, id DESC`,
+      [req.user.id]
+    );
+    return res.json(mine.rows);
+  } catch (err) { next(err); }
 });
 
+/**
+ * POST /api/clients
+ * Admin only: create a client
+ * Body: { name, email?, notes? }
+ */
+router.post('/', requireAdmin, async (req, res, next) => {
+  try {
+    const { name, email, notes } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ msg: 'name is required' });
+    }
+    const q = await db.query(
+      `INSERT INTO clients (name, email, notes, created_at)
+       VALUES ($1, $2, $3, now())
+       RETURNING id, name, email, notes, created_at`,
+      [String(name).trim(), email ?? null, notes ?? null]
+    );
+    return res.status(201).json(q.rows[0]);
+  } catch (err) { next(err); }
+});
+
+/**
+ * DELETE /api/clients/:id
+ * Admin only: delete a client
+ */
+router.delete('/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ msg: 'invalid id' });
+
+    const del = await db.query(`DELETE FROM clients WHERE id = $1`, [id]);
+    if (!del.rowCount) return res.status(404).json({ msg: 'Not found' });
+
+    return res.status(204).send();
+  } catch (err) { next(err); }
+});
 
 module.exports = router;

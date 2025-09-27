@@ -1,97 +1,74 @@
-// --- IMPORTS ---
-// All required packages should be at the top, and only imported once.
 const express = require('express');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
-const authMiddleware = require('../middleware/auth');
+const { z } = require('zod');
+const { validate } = require('../middleware/validate');
+const auth = require('../middleware/auth');
 
-// --- ROUTER SETUP ---
 const router = express.Router();
 
-// --- ROUTES ---
+const registerSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(8).max(128)
+});
 
-// ## REGISTER A NEW USER ##
+const loginSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(1)
+});
+
 // POST /api/auth/register
-router.post('/register', async (req, res) => {
-  const { full_name, email, password, role = 'tutor', pay_rate_cents = null } = req.body;
-
-  if (!full_name || !email || !password) {
-    return res.status(400).json({ msg: 'Please enter all fields' });
-  }
+router.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
-    let user = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (user.rows.length > 0) {
-      return res.status(400).json({ msg: 'User already exists' });
-    }
-    const salt = await bcrypt.genSalt(10);
-    const password_hash = await bcrypt.hash(password, salt);
-    const newUser = await db.query(
-      'INSERT INTO users (full_name, email, password_hash, role, pay_rate_cents) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, role',
-      [full_name, email, password_hash, role, pay_rate_cents]
-    );
-    const payload = { user: { id: newUser.rows[0].id } };
-    jwt.sign(
-      payload,
-      process.env.JWT_SECRET,
-      { expiresIn: '5h' },
-      (err, token) => {
-        if (err) throw err;
-        res.status(201).json({ token });
-      }
-    );
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server error');
-  }
-});
-
-// ## LOGIN A USER ##
-// POST /api/auth/login
-router.post('/login', async (req, res) => {
     const { email, password } = req.body;
-    if (!email || !password) {
-        return res.status(400).json({ msg: 'Please provide email and password' });
-    }
-    try {
-        const userResult = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (userResult.rows.length === 0) {
-            return res.status(400).json({ msg: 'Invalid credentials' });
-        }
-        const user = userResult.rows[0];
-        const isMatch = await bcrypt.compare(password, user.password_hash);
-        if (!isMatch) {
-            return res.status(400).json({ msg: 'Invalid credentials' });
-        }
-        const payload = { user: { id: user.id } };
-        jwt.sign(
-            payload,
-            process.env.JWT_SECRET,
-            { expiresIn: '5h' },
-            (err, token) => {
-                if (err) throw err;
-                res.json({ token });
-            }
-        );
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server error');
-    }
-});
 
-// ## GET LOGGED-IN USER'S DATA (PROTECTED) ##
-// GET /api/auth/me
-router.get('/me', authMiddleware, async (req, res) => {
-  try {
-    const user = await db.query('SELECT id, full_name, email, role FROM users WHERE id = $1', [
-      req.user.id,
-    ]);
-    res.json(user.rows[0]);
+    const exists = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (exists.rowCount > 0) {
+      return res.status(409).json({ msg: 'Email already in use' });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+    const ins = await db.query(
+      "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id, email, role",
+      [email, hash]
+    );
+
+    const user = ins.rows[0];
+    const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({ token, user });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
+    next(err);
   }
 });
 
-// --- EXPORT THE ROUTER ---
+// POST /api/auth/login
+router.post('/login', validate(loginSchema), async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    const q = await db.query('SELECT id, email, role, password_hash FROM users WHERE email = $1', [email]);
+    if (q.rowCount === 0) return res.status(401).json({ msg: 'Invalid credentials' });
+
+    const user = q.rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ msg: 'Invalid credentials' });
+
+    const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+  } catch (err) {
+    next(err);
+  }
+});
+// backend/routes/auth.js (example)
+router.post('/logout', (req, res) => {
+  res.clearCookie('session'); // or whatever cookie you set
+  req.session?.destroy?.(() => {}); // if using express-session
+  return res.json({ ok: true });
+});
+
+// GET /api/auth/me
+router.get('/me', auth, async (req, res) => {
+  res.json({ user: req.user });
+});
+
 module.exports = router;

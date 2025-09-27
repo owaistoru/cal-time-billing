@@ -1,76 +1,101 @@
 const express = require('express');
-const router = express.Router();
 const db = require('../db');
-const authMiddleware = require('../middleware/auth');
-const adminMiddleware = require('../middleware/admin'); // Import admin middleware
+const auth = require('../middleware/auth');
+const { requireRole } = require('../middleware/authorize');
+const { z } = require('zod');
+const { validate } = require('../middleware/validate');
+const bcrypt = require('bcrypt');
+const { mapRoleLabel, hasColumn } = require('../lib/schema');
 
-// Protect all routes in this file with both auth and admin middleware
-router.use(authMiddleware, adminMiddleware);
+const router = express.Router();
 
-// GET /api/admin/sessions/submitted - Get all sessions needing approval
-router.get('/sessions/submitted', async (req, res) => {
+router.use(auth);
+router.use(requireRole('admin'));
+
+// GET /api/admin/users
+router.get('/users', async (req, res, next) => {
   try {
-    const result = await db.query(
-      `SELECT s.id, s.session_date, s.start_time, s.end_time, s.status, u.full_name as tutor_name, c.client_name
-       FROM sessions s
-       JOIN users u ON s.tutor_id = u.id
-       JOIN clients c ON s.client_id = c.id
-       WHERE s.status = 'submitted' ORDER BY s.session_date ASC`
+    const q = await db.query('SELECT id, email, role, created_at FROM users ORDER BY created_at DESC');
+    res.json(q.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/admin/users {email, password, role?, full_name?}
+router.post(
+  '/users',
+  validate(z.object({
+    email: z.string().email(),
+    password: z.string().min(8).max(128),
+    role: z.string().default('user'),
+    full_name: z.string().min(1).max(200).optional()
+  })),
+  async (req, res, next) => {
+    try {
+      const { email, password, full_name } = req.body;
+      const roleMapped = await mapRoleLabel(req.body.role || 'user');
+
+      const exists = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+      if (exists.rowCount > 0) return res.status(409).json({ msg: 'Email already in use' });
+
+      const hash = await bcrypt.hash(password, 12);
+      const hasFullName = await hasColumn('users', 'full_name');
+
+      let q;
+      if (hasFullName) {
+        q = await db.query(
+          'INSERT INTO users (email, password_hash, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at',
+          [email, hash, roleMapped, full_name || email.split('@')[0]]
+        );
+      } else {
+        q = await db.query(
+          'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role, created_at',
+          [email, hash, roleMapped]
+        );
+      }
+      res.status(201).json(q.rows[0]);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/admin/users/:id/role {role}
+router.post('/users/:id/role', async (req, res, next) => {
+  try {
+    const desired = String(req.body.role || '');
+    if (!desired) return res.status(400).json({ msg: 'Missing role' });
+    const roleMapped = await mapRoleLabel(desired);
+
+    const q = await db.query(
+      'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, email, role',
+      [roleMapped, req.params.id]
     );
-    res.json(result.rows);
+    if (q.rowCount === 0) return res.status(404).json({ msg: 'Not found' });
+    res.json(q.rows[0]);
   } catch (err) {
-    res.status(500).send('Server Error');
+    next(err);
   }
 });
 
-// PUT /api/admin/sessions/:id/status - Approve or reject a session
-router.put('/sessions/:id/status', async (req, res) => {
-  const { status, rejection_reason = null } = req.body;
-  const { id } = req.params;
-
-  if (status !== 'approved' && status !== 'rejected') {
-    return res.status(400).json({ msg: 'Invalid status' });
+// POST /api/admin/users/:id/reset-password {password}
+router.post(
+  '/users/:id/reset-password',
+  validate(z.object({ password: z.string().min(8).max(128) })),
+  async (req, res, next) => {
+    try {
+      const hash = await bcrypt.hash(req.body.password, 12);
+      const q = await db.query(
+        'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id, email, role',
+        [hash, req.params.id]
+      );
+      if (q.rowCount === 0) return res.status(404).json({ msg: 'Not found' });
+      res.json({ msg: 'Password reset', user: q.rows[0] });
+    } catch (err) {
+      next(err);
+    }
   }
-
-  try {
-    const result = await db.query(
-      'UPDATE sessions SET status = $1, rejection_reason = $2 WHERE id = $3 RETURNING *',
-      [status, rejection_reason, id]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).send('Server Error');
-  }
-});
-
-
-// GET /api/admin/users - Get all users
-router.get('/users', async (req, res) => {
-  try {
-    const users = await db.query('SELECT id, full_name, email, role, pay_rate_cents, is_active FROM users ORDER BY full_name');
-    res.json(users.rows);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-});
-
-// PUT /api/admin/users/:id - Update a user's details
-router.put('/users/:id', async (req, res) => {
-  const { id } = req.params;
-  const { full_name, email, role, pay_rate_cents, is_active } = req.body;
-
-  try {
-    const updatedUser = await db.query(
-      'UPDATE users SET full_name = $1, email = $2, role = $3, pay_rate_cents = $4, is_active = $5 WHERE id = $6 RETURNING id, full_name, email, role, pay_rate_cents, is_active',
-      [full_name, email, role, pay_rate_cents, is_active, id]
-    );
-    res.json(updatedUser.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send('Server Error');
-  }
-});
-
+);
 
 module.exports = router;

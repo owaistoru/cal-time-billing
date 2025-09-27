@@ -1,29 +1,25 @@
 import React, { useState, useEffect, useContext } from 'react';
-import axios from 'axios';
 import { AuthContext } from '../context/AuthContext';
+import api from '../api'; // IMPORT OUR NEW API CONFIG
 
 function HomePage() {
-  // State for the list of sessions and clients
   const [sessions, setSessions] = useState([]);
   const [clients, setClients] = useState([]);
-  
-  // State for the form inputs
   const [formData, setFormData] = useState({
     client_id: '',
-    session_date: new Date().toISOString().split('T')[0], // Defaults to today
+    session_date: new Date().toISOString().split('T')[0],
     start_time: '',
     end_time: '',
     notes: '',
   });
-  
+  const [successMessage, setSuccessMessage] = useState('');
   const { token } = useContext(AuthContext);
 
-  // Function to fetch data from the backend
   const fetchData = async () => {
-    const config = { headers: { 'x-auth-token': token } };
     try {
-      const sessionsRes = await axios.get('http://localhost:5000/api/sessions/my-sessions', config);
-      const clientsRes = await axios.get('http://localhost:5000/api/clients', config);
+      // USE THE NEW API INSTANCE - no config object needed!
+      const sessionsRes = await api.get('/sessions/my-sessions');
+      const clientsRes = await api.get('/clients');
       setSessions(sessionsRes.data);
       setClients(clientsRes.data);
     } catch (error) {
@@ -31,7 +27,6 @@ function HomePage() {
     }
   };
 
-  // Fetch data when the component first loads
   useEffect(() => {
     if (token) {
       fetchData();
@@ -45,9 +40,21 @@ function HomePage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const config = { headers: { 'x-auth-token': token } };
-      await axios.post('http://localhost:5000/api/sessions', formData, config);
-      fetchData(); // Refresh the list of sessions after adding a new one
+      // USE THE NEW API INSTANCE - no config object needed!
+      await api.post('/sessions', formData);
+      
+      setSuccessMessage('Session logged successfully!');
+      setTimeout(() => setSuccessMessage(''), 3000);
+
+      setFormData({
+        client_id: '',
+        session_date: new Date().toISOString().split('T')[0],
+        start_time: '',
+        end_time: '',
+        notes: '',
+      });
+
+      fetchData();
     } catch (error) {
       console.error('Error adding session:', error);
     }
@@ -73,6 +80,8 @@ function HomePage() {
         <textarea name="notes" placeholder="Session Notes" value={formData.notes} onChange={handleChange}></textarea>
         <button type="submit">Log Session</button>
       </form>
+      
+      {successMessage && <p style={{ color: 'green', marginTop: '1rem' }}>{successMessage}</p>}
 
       <hr />
 

@@ -1,0 +1,2 @@
+/* Keep it minimal to avoid conflicts. Use index.css for most styles. */
+.app { min-height: 100%; }

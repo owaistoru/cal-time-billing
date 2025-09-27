@@ -1,32 +1,65 @@
+// backend/index.js
+'use strict';
+
 require('dotenv').config();
+
 const express = require('express');
-const cors = require('cors'); // 1. IMPORT THE CORS PACKAGE
-const db = require('./db');
+const cookieParser = require('cookie-parser');
+const cors = require('cors');
+const morgan = require('morgan');
+
+const auth = require('./middleware/auth');
+
+// Routers (make sure these files exist)
+const sessions = require('./routes/sessions');
+const approvals = require('./routes/approvals');
+const exportsRouter = require('./routes/exports');
+const clients = require('./routes/clients');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
-// --- MIDDLEWARE ---
-app.use(cors()); // 2. USE THE CORS MIDDLEWARE
+// --- middleware ---
 app.use(express.json());
+app.use(cookieParser());
+app.use(cors({
+  origin: true,          // reflect request origin
+  credentials: true      // send/accept cookies
+}));
+app.use(morgan('dev'));
 
+// --- health ---
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-// --- ROUTES ---
-app.get('/', (req, res) => {
-  res.send('CAL Time & Billing API is running...');
+// --- whoami (used by Navbar/Dashboards) ---
+app.get('/api/me', auth, (req, res) => {
+  // auth middleware must set req.user = { id, email, role, ... }
+  const { id, email, role } = req.user || {};
+  res.json({ id, email, role });
 });
 
-// Use our authentication routes
-app.use('/api/auth', require('./routes/auth'));
+// --- mount feature routes ---
+app.use('/api/sessions', sessions);
+app.use('/api/approvals', approvals);
+app.use('/api/exports', exportsRouter);
+app.use('/api/clients', clients);
 
-// Use our sessions routes
-app.use('/api/sessions', require('./routes/sessions'));
+// --- 404 fallback for unknown /api paths ---
+app.use('/api', (_req, res) => res.status(404).json({ msg: 'Not found' }));
 
+// --- error handler (consistent JSON shape) ---
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  const status = typeof err.status === 'number' ? err.status : 500;
+  const msg = (err && err.expose && err.message) ? err.message
+            : (err && err.message) || 'Server error';
+  res.status(status).json({ msg });
+});
 
-app.use('/api/clients', require('./routes/clients'));
-// ...after app.use('/api/clients',...)
-app.use('/api/admin', require('./routes/admin'));
-// --- SERVER STARTUP ---
+const users = require('./routes/users');
+app.use('/api/users', users);
+
+// --- boot ---
+const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`API listening on http://localhost:${PORT}`);
 });
