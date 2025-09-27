@@ -56,9 +56,12 @@ app.use(errorHandler);     // General purpose error handler
 // Serve the built frontend (production-ish local use)
 const distPath = path.join(__dirname, '..', 'frontend', 'dist');
 app.use(express.static(distPath));
-app.get('*', (_req, res) => {
+
+// Catch-all for non-API routes (Express 5 compatible)
+app.get(/^(?!\/api(\/|$)).*/, (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
+
 // --- Server Boot ---
 const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, () => {

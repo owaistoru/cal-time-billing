@@ -16,6 +16,6 @@ REM Start backend only (serves static frontend)
 start "CAL Backend" cmd /k "cd /d %REPO_DIR%\backend && npm run start"
 
 REM Open app
-start "" http://localhost:3001/
+start "" http://localhost:5000/
 
 endlocal

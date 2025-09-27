@@ -70,7 +70,7 @@ $backendEnv = Join-Path $repo "backend\.env"
 if (-not (Test-Path $backendEnv)) {
   $jwt = -join ((65..90)+(97..122)+(48..57) | Get-Random -Count 32 | ForEach-Object {[char]$_})
 @"
-PORT=3001
+PORT=5000
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/cal_time_billing
 JWT_SECRET=$jwt
 "@ | Set-Content -Encoding UTF8 $backendEnv
@@ -82,7 +82,7 @@ $frontendEnv = Join-Path $repo "frontend\.env.local"
 if (-not (Test-Path $frontendEnv)) {
 @"
 # If you do not proxy /api, you can set:
-# VITE_API_BASE=http://localhost:3001
+# VITE_API_BASE=http://localhost:5000
 "@ | Set-Content -Encoding UTF8 $frontendEnv
 }
 
@@ -93,6 +93,21 @@ try { & cmd /c "npm run build" } finally { Pop-Location }
 # Initialize DB (best-effort)
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\windows\Init-Database.ps1") `
   -DbName "cal_time_billing" -AdminUser "postgres" -AdminPassword "postgres"
+# Initialize DB (best-effort)
+&# Initialize DB (best-effort)
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\windows\Init-Database.ps1") `
+  -DbName "cal_time_billing" -AdminUser "postgres" -AdminPassword "postgres"
+
+# --- BOOTSTRAP FIRST ADMIN (idempotent) ---
+Push-Location (Join-Path $repo "backend")
+try {
+  # You can change these defaults or override via env before running the installer
+  $env:BOOTSTRAP_ADMIN_EMAIL    = "admin@example.com"
+  $env:BOOTSTRAP_ADMIN_PASSWORD = "admin123"
+  $env:BOOTSTRAP_ADMIN_NAME     = "Admin"
+  & cmd /c "node scripts\create_admin.js"
+} finally { Pop-Location }
+
 
 # Create desktop shortcut
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\windows\Create-Shortcut.ps1")
