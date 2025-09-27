@@ -9,51 +9,62 @@ const { z } = require('zod');
 const { validate } = require('../middleware/validate');
 
 const router = express.Router();
+
+// Admin-only guard for everything in this router
 router.use(auth, requireAdmin);
 
-// ... (GET and POST routes for users remain the same)
+// Canonical role enum (must match DB)
+const ROLE_ENUM = ['tutor', 'admin'];
 
+// ---- GET: list users for the Admin UI ----
 router.get('/users', async (req, res, next) => {
   try {
-    const { rows } = await db.query('SELECT id, email, role, created_at, full_name FROM users ORDER BY created_at DESC');
+    const { rows } = await db.query(
+      'SELECT id, email, role, created_at, full_name FROM users ORDER BY created_at DESC'
+    );
     res.json(rows);
   } catch (err) {
     next(err);
   }
 });
 
-// ... (POST /users, POST /users/:id/role, POST /users/:id/reset-password remain here)
+// ---- POST: create a user ----
 router.post(
   '/users',
-  validate(z.object({
-    email: z.string().email(),
-    password: z.string().min(8).max(128),
-    role: z.enum(['user', 'admin']),
-    full_name: z.string().min(1).max(200).optional()
-  })),
+  validate(
+    z.object({
+      email: z.string().email(),
+      password: z.string().min(8).max(128),
+      role: z.enum(ROLE_ENUM),
+      full_name: z.string().min(1).max(200).optional(),
+    })
+  ),
   async (req, res, next) => {
     try {
       const { email, password, role, full_name } = req.body;
-      const { rowCount } = await db.query('SELECT id FROM users WHERE email = $1', [email]);
-      if (rowCount > 0) {
+
+      const exists = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+      if (exists.rowCount > 0) {
         return res.status(409).json({ msg: 'Email already in use' });
       }
+
       const hash = await bcrypt.hash(password, 12);
-      const { rows } = await db.query(
+      const ins = await db.query(
         'INSERT INTO users (email, password_hash, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id, email, role, created_at, full_name',
         [email, hash, role, full_name || email.split('@')[0]]
       );
-      res.status(201).json(rows[0]);
+
+      res.status(201).json(ins.rows[0]);
     } catch (err) {
       next(err);
     }
   }
 );
 
-
+// ---- POST: change a user’s role ----
 router.post(
   '/users/:id/role',
-  validate(z.object({ role: z.enum(['admin', 'user']) })),
+  validate(z.object({ role: z.enum(ROLE_ENUM) })),
   async (req, res, next) => {
     try {
       const { rows } = await db.query(
@@ -68,7 +79,7 @@ router.post(
   }
 );
 
-
+// ---- POST: reset a user’s password ----
 router.post(
   '/users/:id/reset-password',
   validate(z.object({ password: z.string().min(8).max(128) })),
@@ -87,9 +98,7 @@ router.post(
   }
 );
 
-/**
- * NEW: DELETE a user
- */
+// ---- DELETE: delete a user (block if they have sessions) ----
 router.delete('/users/:id', async (req, res, next) => {
   try {
     const userId = Number(req.params.id);
@@ -97,9 +106,13 @@ router.delete('/users/:id', async (req, res, next) => {
       return res.status(403).json({ msg: 'You cannot delete yourself.' });
     }
 
+    // If sessions reference tutors by tutor_id, block delete
     const sessions = await db.query('SELECT id FROM sessions WHERE tutor_id = $1 LIMIT 1', [userId]);
     if (sessions.rowCount > 0) {
-      return res.status(409).json({ msg: 'Cannot delete user with existing sessions. Please reassign or delete their sessions first.' });
+      return res.status(409).json({
+        msg:
+          'Cannot delete user with existing sessions. Please reassign or delete their sessions first.',
+      });
     }
 
     await db.query('DELETE FROM users WHERE id = $1', [userId]);

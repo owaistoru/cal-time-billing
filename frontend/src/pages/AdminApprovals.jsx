@@ -1,129 +1,235 @@
-// frontend/src/pages/AdminApprovals.jsx
-import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import api from '../api';
+import React, { useEffect, useMemo, useState } from "react";
+import api from "../api";
+
+function toLocalIso(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+}
+
+function combineDateTime(date, time) {
+  if (!date || !time) return null;
+  // time may be "HH:MM:SS" from SQL; combine into ISO for Date()
+  const iso = `${date}T${String(time).slice(0, 8)}`;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function hoursBetween(start, end) {
+  if (!start || !end) return "";
+  const ms = end.getTime() - start.getTime();
+  if (!Number.isFinite(ms)) return "";
+  return (ms / 3600000).toFixed(2);
+}
 
 export default function AdminApprovals() {
   const [rows, setRows] = useState([]);
-  const [selected, setSelected] = useState(new Set());
-  const [reason, setReason] = useState('');
-  const [me, setMe] = useState(null);
-  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [posFilter, setPosFilter] = useState("All");
+  const [bulk, setBulk] = useState(new Set());
 
   useEffect(() => {
+    let alive = true;
     (async () => {
+      setLoading(true);
+      setErr("");
       try {
-        const r = await api.get('/api/me').catch(() => ({ data: null }));
-        setMe(r.data || null);
-      } catch { setMe(null); }
-    })();
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get('/api/approvals/queue');
-        setRows(Array.isArray(r.data) ? r.data : []);
-        setSelected(new Set());
+        const { data } = await api.get("/api/approvals/queue");
+        if (alive) setRows(Array.isArray(data) ? data : []);
       } catch (e) {
-        setErr(e?.response?.data?.msg || 'Failed to load approvals');
-        setRows([]);
+        if (alive) setErr(e?.response?.data?.msg || "Failed to load approvals queue.");
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
+    return () => { alive = false; };
   }, []);
 
-  if (me && me.role !== 'admin') {
-    return <Navigate to="/" replace />;
-  }
+  const positions = useMemo(() => {
+    const s = new Set(rows.map(r => r.position).filter(Boolean));
+    return ["All", ...Array.from(s).sort()];
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    if (posFilter === "All") return rows;
+    return rows.filter(r => (r.position || "").toLowerCase() === posFilter.toLowerCase());
+  }, [rows, posFilter]);
 
   const toggle = (id) => {
-    const s = new Set(selected);
-    s.has(id) ? s.delete(id) : s.add(id);
-    setSelected(s);
+    setBulk(prev => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
   };
 
-  const approve = async () => {
-    if (!selected.size) return;
-    setErr('');
+  const removeByIds = (ids) => {
+    setRows(prev => prev.filter(r => !ids.includes(r.id)));
+    setBulk(prev => {
+      const n = new Set(prev);
+      ids.forEach(id => n.delete(id));
+      return n;
+    });
+  };
+
+  const approveOne = async (id) => {
     try {
-      await api.post('/api/approvals/bulk', { approve: Array.from(selected) });
-      // reload
-      const r = await api.get('/api/approvals/queue');
-      setRows(Array.isArray(r.data) ? r.data : []);
-      setSelected(new Set());
-    } catch (e) {
-      setErr(e?.response?.data?.msg || 'Approve failed');
+      await api.post("/api/approvals/bulk", { approve: [id], reject: [] });
+      removeByIds([id]);
+    } catch {
+      alert("Approve failed.");
     }
   };
 
-  const reject = async () => {
-    if (!selected.size) return;
-    if (!reason.trim()) return alert('Enter a rejection reason');
-    setErr('');
+  const requireReason = (initial = "") => {
+    let reason = initial;
+    // Keep asking until we get a non-empty string or the user cancels.
+    // Backend requires min(1) char for reason.
+    // If user cancels, return null.
+    // If user enters only spaces, re-prompt.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      // Use window.prompt for now to keep this one-file patch simple.
+      const r = window.prompt("Enter a rejection reason (required):", reason);
+      if (r === null) return null;                // cancel
+      if (r && r.trim().length > 0) return r.trim();
+      alert("A non-empty reason is required.");
+      reason = "";
+    }
+  };
+
+  const rejectOne = async (id) => {
+    const reason = requireReason();
+    if (reason === null) return;
     try {
-      const payload = { reject: Array.from(selected).map((id) => ({ id, reason })) };
-      await api.post('/api/approvals/bulk', payload);
-      setReason('');
-      const r = await api.get('/api/approvals/queue');
-      setRows(Array.isArray(r.data) ? r.data : []);
-      setSelected(new Set());
-    } catch (e) {
-      setErr(e?.response?.data?.msg || 'Reject failed');
+      await api.post("/api/approvals/bulk", { approve: [], reject: [{ id, reason }] });
+      removeByIds([id]);
+    } catch {
+      alert("Reject failed.");
+    }
+  };
+
+  const approveSelected = async () => {
+    const ids = Array.from(bulk);
+    if (!ids.length) return;
+    try {
+      await api.post("/api/approvals/bulk", { approve: ids, reject: [] });
+      removeByIds(ids);
+    } catch {
+      alert("Bulk approve failed.");
+    }
+  };
+
+  const rejectSelected = async () => {
+    const ids = Array.from(bulk);
+    if (!ids.length) return;
+    const reason = requireReason();
+    if (reason === null) return;
+    try {
+      await api.post("/api/approvals/bulk", {
+        approve: [],
+        reject: ids.map(id => ({ id, reason })),
+      });
+      removeByIds(ids);
+    } catch {
+      alert("Bulk reject failed.");
     }
   };
 
   return (
-    <div className="card">
-      <h2>Approvals</h2>
-      {err && <p className="error">{err}</p>}
+    <div className="max-w-6xl mx-auto px-6 py-8">
+      <h1 className="text-3xl font-semibold mb-6">Approvals</h1>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <button className="btn" onClick={approve} disabled={!selected.size}>Approve selected</button>
-        <input
-          placeholder="Rejection reason"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          style={{ flex: 1 }}
-        />
-        <button className="btn danger" onClick={reject} disabled={!selected.size || !reason.trim()}>Reject selected</button>
+      {err && <div className="mb-4 text-red-400">{err}</div>}
+
+      <div className="flex flex-wrap items-center gap-4 mb-4">
+        <div className="text-lg">Pending: {filtered.length}</div>
+
+        <label className="ml-auto flex items-center gap-2">
+          <span className="opacity-80">Position</span>
+          <select
+            className="bg-transparent border rounded px-3 py-2"
+            value={posFilter}
+            onChange={e => setPosFilter(e.target.value)}
+          >
+            {positions.map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          className="rounded px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50"
+          onClick={approveSelected}
+          disabled={!bulk.size}
+        >
+          Approve Selected
+        </button>
+        <button
+          className="rounded px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50"
+          onClick={rejectSelected}
+          disabled={!bulk.size}
+        >
+          Reject Selected
+        </button>
       </div>
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Tutor</th>
-            <th>Date</th>
-            <th>Start</th>
-            <th>End</th>
-            <th>Position</th>
-            <th>Client</th>
-            <th>Subject/Course</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(rows || []).map((r) => (
-            <tr key={r.id}>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={selected.has(r.id)}
-                  onChange={() => toggle(r.id)}
-                />
-              </td>
-              <td>{r.tutor_email}</td>
-              <td>{r.session_date}</td>
-              <td>{r.start_time}</td>
-              <td>{r.end_time}</td>
-              <td>{r.position}</td>
-              <td>{[r.client_first_name, r.client_last_name].filter(Boolean).join(' ')}</td>
-              <td>{[r.subject_code, r.course_number].filter(Boolean).join(' ')}</td>
-              <td>{r.notes}</td>
+      <div className="overflow-x-auto rounded-lg border border-white/10">
+        <table className="min-w-full">
+          <thead className="bg-white/5">
+            <tr className="text-left">
+              <th className="px-4 py-3 w-10"></th>
+              <th className="px-4 py-3">Session ID</th>
+              <th className="px-4 py-3">Tutor</th>
+              <th className="px-4 py-3">Client</th>
+              <th className="px-4 py-3">Date</th>
+              <th className="px-4 py-3">Hours</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Position</th>
+              <th className="px-4 py-3">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td className="px-4 py-6" colSpan={9}>Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td className="px-4 py-6" colSpan={9}>No items.</td></tr>
+            ) : (
+              filtered.map((r) => {
+                const start = combineDateTime(r.session_date, r.start_time);
+                const end   = combineDateTime(r.session_date, r.end_time);
+                return (
+                  <tr key={r.id} className="border-t border-white/10">
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={bulk.has(r.id)} onChange={() => toggle(r.id)} />
+                    </td>
+                    <td className="px-4 py-3">{r.id}</td>
+                    <td className="px-4 py-3">{r.tutor_email}</td>
+                    <td className="px-4 py-3">
+                      {(r.client_first_name || "") + (r.client_last_name ? " " + r.client_last_name : "")}
+                    </td>
+                    <td className="px-4 py-3">{toLocalIso(r.session_date)}</td>
+                    <td className="px-4 py-3">{hoursBetween(start, end)}</td>
+                    <td className="px-4 py-3 capitalize">{r.status}</td>
+                    <td className="px-4 py-3">{r.position || "-"}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-2">
+                        <button className="rounded px-3 py-1 bg-green-600 hover:bg-green-500" onClick={() => approveOne(r.id)}>
+                          Approve
+                        </button>
+                        <button className="rounded px-3 py-1 bg-red-600 hover:bg-red-500" onClick={() => rejectOne(r.id)}>
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

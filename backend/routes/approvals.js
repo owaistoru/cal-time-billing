@@ -11,9 +11,10 @@ const { validate } = require('../middleware/validate');
 const router = express.Router();
 router.use(auth, requireAdmin);
 
+// Queue of submitted sessions awaiting review.
+// NOTE: no join to clients; we rely on fields stored on the session.
 router.get('/queue', async (req, res, next) => {
   try {
-    // ROBUSTNESS FIX: Use a LEFT JOIN to ensure sessions are shown even if a tutor is deleted.
     const { rows } = await db.query(`
       SELECT
         s.id, s.tutor_id, s.session_date, s.start_time, s.end_time,
@@ -39,6 +40,7 @@ const bulkSchema = z.object({
   })).optional().default([])
 });
 
+// Bulk approve and/or reject with reasons (reasons appended to notes).
 router.post('/bulk', validate(bulkSchema), async (req, res, next) => {
   const client = await db.pool.connect();
   try {
@@ -55,7 +57,11 @@ router.post('/bulk', validate(bulkSchema), async (req, res, next) => {
     for (const r of req.body.reject) {
       await client.query(
         `UPDATE sessions SET status = 'rejected',
-         notes = CONCAT(COALESCE(notes, ''), CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE '; ' END, '[Rejected: ', $2, ']')
+         notes = CONCAT(
+           COALESCE(notes, ''),
+           CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE '; ' END,
+           '[Rejected: ', $2, ']'
+         )
          WHERE id = $1 AND status = 'submitted'`,
         [r.id, r.reason]
       );

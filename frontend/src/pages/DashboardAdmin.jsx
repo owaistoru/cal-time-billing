@@ -1,22 +1,15 @@
 // frontend/src/pages/DashboardAdmin.jsx
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api';
 
 export default function DashboardAdmin() {
-  const [me, setMe] = useState(null);
+  const { user } = useAuth();            // source of truth for who I am
   const [pending, setPending] = useState(0);
   const [err, setErr] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get('/api/me').catch(() => ({ data: null }));
-        setMe(r.data || null);
-      } catch { setMe(null); }
-    })();
-  }, []);
-
+  // Load pending approvals count once
   useEffect(() => {
     (async () => {
       try {
@@ -28,9 +21,9 @@ export default function DashboardAdmin() {
     })();
   }, []);
 
-  if (me && me.role !== 'admin') {
-    return <Navigate to="/" replace />;
-  }
+  // Gate: only admins can be here. If user not loaded yet, show nothing brief.
+  if (!user) return <div className="card"><p>Loading…</p></div>;
+  if (user.role !== 'admin') return <Navigate to="/" replace />;
 
   return (
     <div className="card">
