@@ -32,12 +32,11 @@ const authMiddleware = async (req, res, next) => {
     }
 
     // Dynamically build the query to be safe.
-    const columnsToSelect = `id, email, role${userSchemaHasPayRate ? ', pay_rate_cents' : ''}`;
+    const columnsToSelect = userSchemaHasPayRate
+      ? 'id, email, role, COALESCE(pay_rate_cents, 2850) AS pay_rate_cents'
+      : 'id, email, role';
     
-    const userResult = await db.query(
-      `SELECT ${columnsToSelect} FROM users WHERE id = $1`,
-      [decoded.user.id]
-    );
+    const userResult = await db.query(`SELECT ${columnsToSelect} FROM users WHERE id = $1`, [decoded.user.id]);
 
     if (userResult.rows.length > 0) {
       req.user = userResult.rows[0];

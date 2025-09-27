@@ -48,7 +48,10 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
     const { email, password } = req.body;
     // FEATURE UPDATE: Select pay_rate_cents during login
-    const q = await db.query('SELECT id, email, role, password_hash, pay_rate_cents FROM users WHERE email = $1', [email]);
+  const q = await db.query(
+    'SELECT id, email, role, password_hash, COALESCE(pay_rate_cents, 2850) AS pay_rate_cents FROM users WHERE email = $1',
+    [email]
+  );
     if (q.rowCount === 0) return res.status(401).json({ msg: 'Invalid credentials' });
 
     const user = q.rows[0];
@@ -57,7 +60,10 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
 
     const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
     // FEATURE UPDATE: Return pay_rate_cents in the user payload
-    res.json({ token, user: { id: user.id, email: user.email, role: user.role, pay_rate_cents: user.pay_rate_cents } });
+  res.json({
+    token,
+    user: { id: user.id, email: user.email, role: user.role, pay_rate_cents: user.pay_rate_cents }
+  });
   } catch (err) {
     next(err);
   }

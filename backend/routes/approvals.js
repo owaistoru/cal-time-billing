@@ -56,12 +56,11 @@ router.post('/bulk', validate(bulkSchema), async (req, res, next) => {
 
     for (const r of req.body.reject) {
       await client.query(
-        `UPDATE sessions SET status = 'rejected',
-         notes = CONCAT(
-           COALESCE(notes, ''),
-           CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE '; ' END,
-           '[Rejected: ', $2, ']'
-         )
+        `UPDATE sessions
+           SET status = 'rejected',
+               notes  = COALESCE(notes, '')
+                       || CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE '; ' END
+                       || '[Rejected: ' || $2 || ']'
          WHERE id = $1 AND status = 'submitted'`,
         [r.id, r.reason]
       );

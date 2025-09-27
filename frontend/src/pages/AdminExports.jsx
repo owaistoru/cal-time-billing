@@ -1,108 +1,124 @@
 // frontend/src/pages/AdminExports.jsx
-import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
 
 export default function AdminExports() {
-  const [me, setMe] = useState(null);
-  const [err, setErr] = useState('');
-  const [users, setUsers] = useState(null); // null = unknown (fetching/failed), [] = none
+  const [users, setUsers] = useState([]);
+  const [loadErr, setLoadErr] = useState('');
   const [tutorId, setTutorId] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [err, setErr] = useState('');
 
-  // who am i?
+  // Load all users from the admin endpoint and keep only tutors
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
-        const r = await api.get('/api/me').catch(() => ({ data: null }));
-        setMe(r.data || null);
-      } catch {
-        setMe(null);
+        setLoadErr('');
+        const { data } = await api.get('/api/admin/users'); // admin list
+        if (!alive) return;
+        const list = Array.isArray(data) ? data : [];
+        setUsers(list.filter(u => (u.role || '').toLowerCase() === 'tutor'));
+      } catch (e) {
+        if (!alive) return;
+        setLoadErr('Could not load tutors list. You can still paste a Tutor ID manually.');
+        setUsers([]); // degrade gracefully
       }
     })();
+    return () => { alive = false; };
   }, []);
 
-  // optional list of users (nice-to-have, not required)
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get('/api/users'); // if you don't have this route, we'll degrade gracefully
-        const list = Array.isArray(r.data) ? r.data : [];
-        // keep only tutors by role if present
-        const filtered = list.filter(u => (u.role ? u.role !== 'admin' : true));
-        setUsers(filtered);
-      } catch {
-        setUsers(null); // will show manual input for tutorId
-      }
-    })();
-  }, []);
+  const canDownload = useMemo(
+    () => String(tutorId || '').trim() && from && to,
+    [tutorId, from, to]
+  );
 
-  if (me && me.role !== 'admin') {
-    return <Navigate to="/" replace />;
+  async function handleDownload() {
+    try {
+      setErr('');
+      if (!tutorId) return setErr('Pick a tutor or enter a Tutor ID.');
+      if (!from || !to) return setErr('Select both From and To dates.');
+
+      setDownloading(true);
+      const qs = new URLSearchParams({ tutorId: String(tutorId), from, to }).toString();
+
+      // Use axios instance so Authorization header is included automatically.
+      const res = await api.get(`/api/exports/timesheet?${qs}`, { responseType: 'blob' });
+      const blob = res.data;
+
+      const a = document.createElement('a');
+      const fname = `timesheet_${tutorId}_${from}_${to}.csv`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 0);
+    } catch (e) {
+      const msg = e?.response?.status ? `Export failed: ${e.response.status}` : (e.message || 'Export failed');
+      setErr(msg);
+    } finally {
+      setDownloading(false);
+    }
   }
 
-  const download = () => {
-    setErr('');
-    const id = String(tutorId || '').trim();
-    if (!id) {
-      setErr('Pick or enter a Tutor ID.');
-      return;
-    }
-    const url =
-      `/api/exports/timesheet?tutorId=${encodeURIComponent(id)}` +
-      `&from=${encodeURIComponent(from || '')}` +
-      `&to=${encodeURIComponent(to || '')}`;
-    window.location = url;
-  };
-
   return (
-    <div className="card">
-      <h2>Timesheet Export (CSV)</h2>
-      {err && <p className="error">{err}</p>}
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <h1 className="text-3xl font-semibold mb-6">Timesheet Exports</h1>
 
-      <div className="form grid2">
-        {Array.isArray(users) ? (
-          <label>Tutor
+      {loadErr && <div className="mb-3 text-yellow-400 text-sm">{loadErr}</div>}
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-sm mb-1">Tutor</label>
+          {users.length > 0 ? (
             <select
+              className="w-full rounded bg-slate-800 p-2"
               value={tutorId}
               onChange={e => setTutorId(e.target.value)}
             >
-              <option value="">Select tutor</option>
+              <option value="">select</option>
               {users.map(u => (
                 <option key={u.id} value={u.id}>
-                  {u.email || `User #${u.id}`} {u.role ? `(${u.role})` : ''}
+                  {u.full_name ? `${u.full_name} — ${u.email}` : u.email} (id {u.id})
                 </option>
               ))}
             </select>
-          </label>
-        ) : (
-          <label>Tutor ID
+          ) : (
             <input
-              type="number"
-              placeholder="Enter tutor user ID"
+              className="w-full rounded bg-slate-800 p-2"
+              placeholder="Paste Tutor ID"
               value={tutorId}
               onChange={e => setTutorId(e.target.value)}
             />
-          </label>
-        )}
-
-        <label>From
-          <input type="date" value={from} onChange={e => setFrom(e.target.value)} />
-        </label>
-
-        <label>To
-          <input type="date" value={to} onChange={e => setTo(e.target.value)} />
-        </label>
+          )}
+        </div>
 
         <div>
-          <button className="btn" onClick={download}>Download CSV</button>
+          <label className="block text-sm mb-1">From (YYYY-MM-DD)</label>
+          <input type="date" className="w-full rounded bg-slate-800 p-2" value={from} onChange={e => setFrom(e.target.value)} />
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1">To (YYYY-MM-DD)</label>
+          <input type="date" className="w-full rounded bg-slate-800 p-2" value={to} onChange={e => setTo(e.target.value)} />
         </div>
       </div>
 
-      <p style={{opacity:.8, marginTop:12}}>
-        Exports only <b>approved</b> sessions in the selected date range.
-        Output matches UVic/CAL columns (Position, Client First/Last, Subject, Course, Month, Day, Start, End, Hours, Notes).
+      {err && <div className="mt-3 text-red-400 text-sm">{err}</div>}
+
+      <button
+        className="mt-4 px-4 py-2 rounded bg-blue-600 disabled:opacity-50"
+        disabled={!canDownload || downloading}
+        onClick={handleDownload}
+      >
+        {downloading ? 'Preparing CSV…' : 'Download CSV'}
+      </button>
+
+      <p className="text-sm opacity-80 mt-4">
+        Exports include <b>approved</b> sessions for the selected tutor within the dates provided.
       </p>
     </div>
   );
