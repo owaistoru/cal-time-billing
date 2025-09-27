@@ -1,36 +1,43 @@
+// backend/middleware/auth.js
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const { hasColumn } = require('../lib/schema');
+
+// Cache the result of the schema check for performance
+let userHasPayRate = null;
 
 const authMiddleware = async (req, res, next) => {
-  let token = null;
-
   const authHeader = req.headers['authorization'];
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.slice(7);
-  } else if (req.header('x-auth-token')) {
-    token = req.header('x-auth-token');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return next(); // No token, proceed as unauthenticated
   }
 
-  if (!token) {
-    return res.status(401).json({ msg: 'No token, authorization denied' });
-  }
-  if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ msg: 'Server misconfigured. JWT secret missing' });
-  }
+  const token = authHeader.slice(7);
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check for pay_rate_cents column only once
+    if (userHasPayRate === null) {
+      userHasPayRate = await hasColumn('users', 'pay_rate_cents');
+    }
+    
+    // Dynamically build the query based on the schema
+    const selectClause = `SELECT id, email, role${userHasPayRate ? ', pay_rate_cents' : ''}`;
+    
     const userResult = await db.query(
-      'SELECT id, email, role FROM users WHERE id = $1',
+      `${selectClause} FROM users WHERE id = $1`,
       [decoded.user.id]
     );
-    if (userResult.rows.length === 0) {
-      return res.status(401).json({ msg: 'Token is not valid' });
+
+    if (userResult.rows.length > 0) {
+      req.user = userResult.rows[0];
     }
-    req.user = userResult.rows[0];
+    
     next();
-  } catch {
-    return res.status(401).json({ msg: 'Token is not valid' });
+  } catch (err) {
+    // Invalid token, proceed as unauthenticated
+    next();
   }
 };
 

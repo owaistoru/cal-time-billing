@@ -11,15 +11,16 @@ function validate(schema, where = 'body') {
     const data = req[where];
     const out = schema.safeParse(data);
     if (!out.success) {
+      // Format Zod errors into a user-friendly message string
       const msg = out.error.issues
         .map(i => {
-          const p = i.path && i.path.length ? `${i.path.join('.')}: ` : '';
+          const p = i.path && i.path.length > 0 ? `${i.path.join('.')}: ` : '';
           return `${p}${i.message}`;
         })
         .join('; ');
       return res.status(400).json({ msg });
     }
-    // replace with parsed/coerced data
+    // Important: Overwrite the request data with the parsed (and possibly transformed) data
     req[where] = out.data;
     return next();
   };

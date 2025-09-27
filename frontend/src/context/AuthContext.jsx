@@ -1,5 +1,6 @@
+// frontend/src/context/AuthContext.jsx
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import api from '../api';
+import api, { clearAuthToken } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -7,12 +8,20 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
 
+  // Check for an existing token on initial app load
   useEffect(() => {
     const token = localStorage.getItem('token');
-    if (!token) { setReady(true); return; }
+    if (!token) {
+      setReady(true);
+      return;
+    }
     api.get('/api/auth/me')
       .then(r => setUser(r.data.user))
-      .catch(() => setUser(null))
+      .catch(() => {
+        // If token is invalid, clear it
+        clearAuthToken();
+        setUser(null);
+      })
       .finally(() => setReady(true));
   }, []);
 
@@ -32,14 +41,32 @@ export function AuthProvider({ children }) {
       setUser(r.data.user);
       return r.data.user;
     },
-    logout: () => {
-      localStorage.removeItem('token');
-      setUser(null);
+    logout: async () => {
+      try {
+        // Inform the server of logout (best effort)
+        await api.post('/api/auth/logout');
+      } catch (e) {
+        console.error('Logout API call failed', e);
+      } finally {
+        // Always clear token and user state on the client
+        clearAuthToken();
+        setUser(null);
+      }
     }
   }), [user]);
 
-  if (!ready) return null;
+  // Render children only when auth status is resolved
+  if (!ready) {
+    return <div className="card" style={{ padding: 24 }}>Authenticating…</div>;
+  }
+  
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() { return useContext(AuthContext); }
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}

@@ -8,57 +8,53 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const morgan = require('morgan');
 
+// Middleware
 const auth = require('./middleware/auth');
+const { notFound, errorHandler } = require('./middleware/error');
 
-// Routers (make sure these files exist)
-const sessions = require('./routes/sessions');
-const approvals = require('./routes/approvals');
-const exportsRouter = require('./routes/exports');
-const clients = require('./routes/clients');
+// Routers
+const authRoutes = require('./routes/auth');
+const sessionRoutes = require('./routes/sessions');
+const approvalRoutes = require('./routes/approvals');
+const exportRoutes = require('./routes/exports');
+const clientRoutes = require('./routes/clients');
+const userRoutes = require('./routes/users');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 
-// --- middleware ---
+// --- Core Middleware ---
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
-  origin: true,          // reflect request origin
-  credentials: true      // send/accept cookies
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
+  credentials: true
 }));
 app.use(morgan('dev'));
 
-// --- health ---
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+// --- API Routes ---
+app.use('/api/auth', authRoutes);
+app.use('/api/sessions', sessionRoutes);
+app.use('/api/approvals', approvalRoutes);
+app.use('/api/exports', exportRoutes);
+app.use('/api/clients', clientRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
 
-// --- whoami (used by Navbar/Dashboards) ---
+// --- Who Am I Route ---
 app.get('/api/me', auth, (req, res) => {
-  // auth middleware must set req.user = { id, email, role, ... }
-  const { id, email, role } = req.user || {};
-  res.json({ id, email, role });
+  if (req.user) {
+    res.json({ user: req.user });
+  } else {
+    res.status(401).json({ msg: 'Not authenticated' });
+  }
 });
 
-// --- mount feature routes ---
-app.use('/api/sessions', sessions);
-app.use('/api/approvals', approvals);
-app.use('/api/exports', exportsRouter);
-app.use('/api/clients', clients);
+// --- Error Handling ---
+app.use('/api', notFound); // 404 for any unhandled /api routes
+app.use(errorHandler);     // General purpose error handler
 
-// --- 404 fallback for unknown /api paths ---
-app.use('/api', (_req, res) => res.status(404).json({ msg: 'Not found' }));
-
-// --- error handler (consistent JSON shape) ---
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  const status = typeof err.status === 'number' ? err.status : 500;
-  const msg = (err && err.expose && err.message) ? err.message
-            : (err && err.message) || 'Server error';
-  res.status(status).json({ msg });
-});
-
-const users = require('./routes/users');
-app.use('/api/users', users);
-
-// --- boot ---
+// --- Server Boot ---
 const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, () => {
   console.log(`API listening on http://localhost:${PORT}`);

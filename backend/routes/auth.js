@@ -1,3 +1,4 @@
+// backend/routes/auth.js
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -10,7 +11,8 @@ const router = express.Router();
 
 const registerSchema = z.object({
   email: z.string().email().max(254),
-  password: z.string().min(8).max(128)
+  password: z.string().min(8).max(128),
+  full_name: z.string().optional()
 });
 
 const loginSchema = z.object({
@@ -18,10 +20,9 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 
-// POST /api/auth/register
 router.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, full_name } = req.body;
 
     const exists = await db.query('SELECT id FROM users WHERE email = $1', [email]);
     if (exists.rowCount > 0) {
@@ -29,9 +30,10 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
     }
 
     const hash = await bcrypt.hash(password, 12);
+    // Note: 'tutor' is used to align with potential database enums.
     const ins = await db.query(
-      "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id, email, role",
-      [email, hash]
+      "INSERT INTO users (email, password_hash, role, full_name) VALUES ($1, $2, 'tutor', $3) RETURNING id, email, role, pay_rate_cents",
+      [email, hash, full_name || email.split('@')[0]]
     );
 
     const user = ins.rows[0];
@@ -42,11 +44,11 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
   }
 });
 
-// POST /api/auth/login
 router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    const q = await db.query('SELECT id, email, role, password_hash FROM users WHERE email = $1', [email]);
+    // FEATURE UPDATE: Select pay_rate_cents during login
+    const q = await db.query('SELECT id, email, role, password_hash, pay_rate_cents FROM users WHERE email = $1', [email]);
     if (q.rowCount === 0) return res.status(401).json({ msg: 'Invalid credentials' });
 
     const user = q.rows[0];
@@ -54,20 +56,20 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
     if (!ok) return res.status(401).json({ msg: 'Invalid credentials' });
 
     const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+    // FEATURE UPDATE: Return pay_rate_cents in the user payload
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role, pay_rate_cents: user.pay_rate_cents } });
   } catch (err) {
     next(err);
   }
 });
-// backend/routes/auth.js (example)
+
 router.post('/logout', (req, res) => {
-  res.clearCookie('session'); // or whatever cookie you set
-  req.session?.destroy?.(() => {}); // if using express-session
-  return res.json({ ok: true });
+  // This is a best-effort endpoint. The client handles token removal.
+  res.json({ ok: true });
 });
 
-// GET /api/auth/me
 router.get('/me', auth, async (req, res) => {
+  // The user object from the `auth` middleware now includes pay_rate_cents
   res.json({ user: req.user });
 });
 

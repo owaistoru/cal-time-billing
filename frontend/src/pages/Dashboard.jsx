@@ -1,17 +1,17 @@
-import { Link } from 'react-router-dom';
+// frontend/src/pages/Dashboard.jsx
 import { useAuth } from '../context/AuthContext';
+import DashboardAdmin from './DashboardAdmin';
+import DashboardTutor from './DashboardTutor';
 
 export default function Dashboard() {
   const { user } = useAuth();
-  return (
-    <div className="card">
-      <h2>Dashboard</h2>
-      <p>Welcome, {user?.email}</p>
-      <div className="grid">
-        <Link to="/clients" className="tile">Manage Clients</Link>
-        <Link to="/sessions" className="tile">Log Sessions</Link>
-        {user?.role === 'admin' && <Link to="/admin" className="tile">Admin Panel</Link>}
-      </div>
-    </div>
-  );
+
+  // This fallback should rarely be seen because ProtectedRoute handles it,
+  // but it's good practice to have.
+  if (!user) {
+    return <div className="card"><p>Loading user data...</p></div>;
+  }
+
+  // Render the correct dashboard based on the user's role.
+  return user.role === 'admin' ? <DashboardAdmin /> : <DashboardTutor />;
 }

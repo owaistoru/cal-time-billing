@@ -1,70 +1,46 @@
 // frontend/src/App.jsx
-import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import api from './api';
-
-// Layout
+import { Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
+import ProtectedRoute from './components/ProtectedRoute';
 
-// Pages (comment out the ones you don't have)
+// Page Imports
+import HomePage from './pages/HomePage';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import Dashboard from './pages/Dashboard';
 import Sessions from './pages/Sessions';
-import DashboardTutor from './pages/DashboardTutor';
-import DashboardAdmin from './pages/DashboardAdmin';
-// import Clients from './pages/Clients';
-// import AdminApprovals from './pages/AdminApprovals';
-// import AdminExports from './pages/AdminExports';
+import Clients from './pages/Clients';
+import AdminApprovals from './pages/AdminApprovals';
+import AdminExports from './pages/AdminExports';
+import AdminUsers from './pages/AdminUsers';
+import DashboardAdmin from './pages/DashboardAdmin'; // Import DashboardAdmin for the admin route
 
-function App() {
-  const [me, setMe] = useState(undefined); // undefined = loading, null = not signed in
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get('/api/me').catch(() => ({ data: null }));
-        setMe(r?.data ?? null);
-      } catch {
-        setMe(null);
-      }
-    })();
-  }, []);
-
-  if (me === undefined) {
-    return <div style={{ padding: 24 }}>Loading…</div>;
-  }
-
-  const role = me?.role === 'admin' ? 'admin' : 'user';
-
+export default function App() {
   return (
-    <BrowserRouter>
-      <Navbar user={me || null} />
-
-      <main style={{ maxWidth: 1100, margin: '24px auto', padding: '0 16px' }}>
+    <div className="app">
+      <Navbar />
+      <main className="content">
         <Routes>
-          {/* Home by role */}
-          <Route
-            path="/"
-            element={role === 'admin' ? <DashboardAdmin /> : <DashboardTutor />}
-          />
+          {/* Public Routes */}
+          <Route path="/" element={<HomePage />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
-          {/* Shared */}
-          <Route path="/sessions" element={<Sessions />} />
+          {/* Protected User Routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/sessions" element={<ProtectedRoute><Sessions /></ProtectedRoute>} />
+          
+          {/* Protected Admin Routes */}
+          <Route path="/admin" element={<ProtectedRoute role="admin"><DashboardAdmin /></ProtectedRoute>} />
+          <Route path="/clients" element={<ProtectedRoute role="admin"><Clients /></ProtectedRoute>} />
+          <Route path="/admin/approvals" element={<ProtectedRoute role="admin"><AdminApprovals /></ProtectedRoute>} />
+          <Route path="/admin/exports" element={<ProtectedRoute role="admin"><AdminExports /></ProtectedRoute>} />
+          <Route path="/admin/users" element={<ProtectedRoute role="admin"><AdminUsers /></ProtectedRoute>} />
 
-          {/* Admin-only routes (uncomment only if these files exist) */}
-          {/* {role === 'admin' && <Route path="/clients" element={<Clients />} />} */}
-          {/* {role === 'admin' && <Route path="/admin/approvals" element={<AdminApprovals />} />} */}
-          {/* {role === 'admin' && <Route path="/admin/exports" element={<AdminExports />} />} */}
-
-          {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Fallback for any other path */}
+          <Route path="*" element={<div className="card"><h2>404 - Not Found</h2></div>} />
         </Routes>
       </main>
-    </BrowserRouter>
+    </div>
   );
-}
-
-export default App;
-// Clear JWT from client so subsequent requests are anonymous
-export function clearAuthToken() {
-  try { localStorage.removeItem('token'); } catch {}
-  try { delete api.defaults.headers.common['Authorization']; } catch {}
 }
