@@ -31,7 +31,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(morgan('dev'));
-
+const path = require('path');
 // --- API Routes ---
 app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionRoutes);
@@ -53,7 +53,12 @@ app.get('/api/me', auth, (req, res) => {
 // --- Error Handling ---
 app.use('/api', notFound); // 404 for any unhandled /api routes
 app.use(errorHandler);     // General purpose error handler
-
+// Serve the built frontend (production-ish local use)
+const distPath = path.join(__dirname, '..', 'frontend', 'dist');
+app.use(express.static(distPath));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
 // --- Server Boot ---
 const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, () => {
